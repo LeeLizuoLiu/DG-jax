@@ -1,11 +1,318 @@
 import numpy as np
 import jax.numpy as jnp
 import math
+from utils import mesh_reader_gambit_2d
+import pdb
+
 
 import numpy as np
 from scipy.special import gamma
 
 class Elements:
+
+    def __init__(self, mesh_path, order = 3):
+        # Finish the startup2D.m
+        
+        Np = (order + 1) * (order + 2) // 2
+        Nfp = order + 1
+        Nfaces = 3
+        NODETOL = 1.0e-10
+
+        x, y = self.Nodes2D(order)
+        r, s = self.xytors(x, y)
+        V = self.Vandermonde2D(order, r, s)
+        invV = np.linalg.inv(V)
+        Dr, Ds = self.Dmatrices2D(order, r, s, V)
+        Nv, VX, VY, K, EToV = mesh_reader_gambit_2d(mesh_path)
+        x, y, Fmask, Fx, Fy = self.convert_coordinates(EToV, VX, VY, r, s, NODETOL)
+        lift = self.Lift2D(order, Np, Nfaces, Nfp, Fmask, r, s, V)
+        rx, sx, ry, sy, J = self.GeometricFactors2D(x, y, Dr, Ds)
+        nx, ny, sJ = self.Normals2D(Dr, Ds, x, y, Fmask, Nfp, K)
+        Fscale = sJ / J[Fmask.flatten(order='F'),:]
+        EToE, EToF = self.tiConnect2D(EToV)
+        mapM, mapP, vmapM, vmapP, vmapB, mapB = self.BuildMaps2D(K, Np, Nfaces, Nfp, Fmask, EToE, EToF, EToV, VX, VY, x, y, NODETOL)
+        Vr, Vs = self.GradVandermonde2D(order, r, s)
+        Drw = (V @ Vr.T) / (V @ V.T)
+        Dsw = (V @ Vs.T) / (V @ V.T) 
+
+
+    @staticmethod
+    def BuildMaps2D(K, Np, Nfaces, Nfp, Fmask, EToE, EToF, EToV, VX, VY, x, y, NODETOL):
+        """
+        Connectivity and boundary tables in the K # of Np elements
+
+        Returns:
+        mapM, mapP : numpy arrays
+            Connectivity maps
+        vmapM, vmapP : numpy arrays
+            Volume node maps
+        vmapB : numpy array
+            Boundary volume nodes
+        mapB : numpy array
+            Boundary map
+        """
+        # number volume nodes consecutively
+        nodeids = np.arange(0, K*Np).reshape(Np, K, order='F')
+
+        vmapM = np.zeros((Nfp, Nfaces, K), dtype=int)
+        vmapP = np.zeros((Nfp, Nfaces, K), dtype=int)
+
+        mapM = np.arange(0, K*Nfp*Nfaces)
+        mapP = mapM.reshape(Nfp, Nfaces, K, order='F')
+        # find index of face nodes with respect to volume node ordering
+        for k1 in range(K):
+            for f1 in range(Nfaces):
+                vmapM[:, f1, k1] = nodeids[Fmask[:, f1], k1]
+
+        one = np.ones(Nfp)
+
+        for k1 in range(K):
+            for f1 in range(Nfaces):
+                # find neighbor
+                k2 = EToE[k1, f1]
+                f2 = EToF[k1, f1]
+
+                # reference length of edge
+                v1 = EToV[k1, f1]
+                v2 = EToV[k1, 1 + f1 % (Nfaces - 1)]
+
+                refd = np.sqrt((VX[v1] - VX[v2])**2 + (VY[v1] - VY[v2])**2)
+
+                # find volume node numbers of left and right nodes
+                vidM = vmapM[:, f1, k1]
+                vidP = vmapM[:, f2, k2]
+                x1 = x.ravel(order='F')[vidM]
+                y1 = y.ravel(order='F')[vidM]
+                x2 = x.ravel(order='F')[vidP]
+                y2 = y.ravel(order='F')[vidP]
+
+                # Compute distance matrix
+                D = (x1[:, np.newaxis] - x2)**2 + (y1[:, np.newaxis] - y2)**2
+
+                # Find indices where distance is small
+                idP, idM = np.where(np.sqrt(np.abs(D)) < NODETOL * refd)
+
+                vmapP[idM, f1, k1] = vidP[idP]
+                mapP[idM, f1, k1] = idP + (f2)*Nfp + (k2)*Nfaces*Nfp
+
+        # reshape vmapM and vmapP to be vectors and create boundary node list
+        vmapP = vmapP.ravel(order="F")
+        vmapM = vmapM.ravel(order="F")
+        mapP =   mapP.ravel(order="F")
+
+        mapB = np.where(vmapP == vmapM)[0]
+        vmapB = vmapM[mapB]
+
+        return mapM, mapP, vmapM, vmapP, vmapB, mapB
+
+
+    @staticmethod
+    def tiConnect2D(EToV):
+        """
+        Triangle face connect algorithm due to Toby Isaac
+        Parameters:
+        EToV : numpy array
+            Element to vertex connectivity (0-indexed)
+        Returns:
+        EToE : numpy array
+            Element to element connectivity
+        EToF : numpy array
+            Element to face connectivity
+        """
+        Nfaces = 3
+        K = EToV.shape[0]
+        Nnodes = np.max(EToV) + 1  # +1 because we're 0-indexed
+
+        # create list of all faces 1, then 2, & 3
+        fnodes = np.vstack([
+            EToV[:, [0, 1]],
+            EToV[:, [1, 2]],
+            EToV[:, [2, 0]]
+        ])
+
+        # Sort the nodes but don't subtract 1 since we're already 0-indexed
+        fnodes = np.sort(fnodes, axis=1, kind='stable')
+
+        # set up default element to element and Element to faces connectivity
+        # Use 0-indexed arrays for Python
+        EToE = np.tile(np.arange(K), (Nfaces, 1)).T
+        EToF = np.tile(np.arange(Nfaces), (K, 1))
+
+        # uniquely number each set of three faces by their node numbers
+        # Adjust the formula for 0-indexed nodes
+        id = fnodes[:, 0] * Nnodes + fnodes[:, 1]
+
+        # Create spNodeToNode with 0-indexed values
+        spNodeToNode = np.column_stack([
+            id, 
+            np.arange(Nfaces*K),  # 0-indexed
+            EToE.flatten(order='F'),
+            EToF.flatten(order='F')
+        ])
+
+        # Now we sort by global face number
+        sorted_indices = np.argsort(spNodeToNode[:, 0], kind='stable')
+        sorted_spNodeToNode = spNodeToNode[sorted_indices]
+
+        # find matches in the sorted face list
+        indices = np.where(sorted_spNodeToNode[:-1, 0] == sorted_spNodeToNode[1:, 0])[0]
+
+        # make links reflexive
+        matchL = np.vstack([
+            sorted_spNodeToNode[indices],
+            sorted_spNodeToNode[indices+1]
+        ])
+        matchR = np.vstack([
+            sorted_spNodeToNode[indices+1],
+            sorted_spNodeToNode[indices]
+        ])
+
+        # Insert matches using linear indexing
+        linear_indices = matchL[:, 1].astype(int)
+
+        # Flatten arrays in column-major order for direct indexing
+        EToE_flat = EToE.flatten(order='F')
+        EToF_flat = EToF.flatten(order='F')
+
+        # Update using linear indexing
+        EToE_flat[linear_indices] = matchR[:, 2]
+        EToF_flat[linear_indices] = matchR[:, 3]
+
+        # Reshape back to original form
+        EToE = EToE_flat.reshape(EToE.shape, order='F')
+        EToF = EToF_flat.reshape(EToF.shape, order='F')
+
+        return EToE, EToF
+
+    @staticmethod
+    def Normals2D(Dr, Ds, x, y, Fmask, Nfp, K):
+        """
+        Compute outward pointing normals at elements faces and surface Jacobians
+
+        Parameters:
+        Dr : numpy array
+            Derivative matrix in r direction
+        Ds : numpy array
+            Derivative matrix in s direction
+        x : numpy array
+            x coordinates
+        y : numpy array
+            y coordinates
+        Fmask : numpy array
+            Face mask indices
+        Nfp : int
+            Number of face points
+        K : int
+            Number of elements
+
+        Returns:
+        nx, ny : numpy arrays
+            Normalized normal vectors
+        sJ : numpy array
+            Surface Jacobians
+        """
+        # Compute geometric factors
+        xr = Dr @ x
+        yr = Dr @ y
+        xs = Ds @ x
+        ys = Ds @ y
+        J = xr * ys - xs * yr
+        Fmask = Fmask.flatten(order='F')
+
+        # Interpolate geometric factors to face nodes
+        fxr = xr[Fmask, :]
+        fxs = xs[Fmask, :]
+        fyr = yr[Fmask, :]
+        fys = ys[Fmask, :]
+
+        # Initialize normal vectors
+        nx = np.zeros((3*Nfp, K))
+        ny = np.zeros((3*Nfp, K))
+
+        # Define face indices
+        fid1 = np.arange(Nfp)
+        fid2 = np.arange(Nfp, 2*Nfp)
+        fid3 = np.arange(2*Nfp, 3*Nfp)
+
+        # Face 1
+        nx[fid1, :] = fyr[fid1, :]
+        ny[fid1, :] = -fxr[fid1, :]
+
+        # Face 2
+        nx[fid2, :] = fys[fid2, :] - fyr[fid2, :]
+        ny[fid2, :] = -fxs[fid2, :] + fxr[fid2, :]
+
+        # Face 3
+        nx[fid3, :] = -fys[fid3, :]
+        ny[fid3, :] = fxs[fid3, :]
+
+        # Normalize
+        sJ = np.sqrt(nx**2 + ny**2)
+        nx = nx / sJ
+        ny = ny / sJ
+
+        return nx, ny, sJ
+    @staticmethod
+    def GeometricFactors2D(x, y, Dr, Ds):
+        """
+        Compute the metric elements for the local mappings of the elements
+
+        Parameters:
+        x : numpy array
+            x coordinates
+        y : numpy array
+            y coordinates
+        Dr : numpy array
+            Derivative matrix in r direction
+        Ds : numpy array
+            Derivative matrix in s direction
+
+        Returns:
+        rx, sx, ry, sy : numpy arrays
+            Metric terms
+        J : numpy array
+            Jacobian
+        """
+        # Calculate geometric factors
+        xr = Dr @ x  # Matrix multiplication in Python
+        xs = Ds @ x
+        yr = Dr @ y
+        ys = Ds @ y
+
+        # Compute Jacobian
+        J = -xs * yr + xr * ys
+
+        # Compute metric terms
+        rx = ys / J
+        sx = -yr / J
+        ry = -xs / J
+        sy = xr / J
+
+        return rx, sx, ry, sy, J
+    @staticmethod
+    def convert_coordinates(EToV, VX, VY, r, s, NODETOL):
+        # build coordinates of all the nodes
+        va = EToV[:, 0]
+        vb = EToV[:, 1]
+        vc = EToV[:, 2]
+        r = r.reshape(-1,1)
+        s = s.reshape(-1,1)
+
+        x = 0.5 * (-(r + s) * VX[va] + (1 + r) * VX[vb] + (1 + s) * VX[vc])
+        y = 0.5 * (-(r + s) * VY[va] + (1 + r) * VY[vb] + (1 + s) * VY[vc])
+
+        # find all the nodes that lie on each edge
+        fmask1 = np.where(np.abs(s + 1) < NODETOL)[0]
+        fmask2 = np.where(np.abs(r + s) < NODETOL)[0]
+        fmask3 = np.where(np.abs(r + 1) < NODETOL)[0]
+
+        Fmask = np.stack([fmask1, fmask2, fmask3]).T
+
+        Fx = x[Fmask.flatten(order='F'), :]
+        Fy = y[Fmask.flatten(order='F'), :]
+
+        return x, y, Fmask, Fx, Fy
+
     @staticmethod
     def JacobiP(x, alpha, beta, N):
         """
@@ -43,14 +350,13 @@ class Elements:
         
         # Forward recurrence
         for i in range(N-1):
-            h1 = 2*i + alpha + beta
-            anew = 2/(h1+2) * np.sqrt((i+1)*(i+1+alpha+beta)*(i+1+alpha)*(i+1+beta) / (h1+1)/(h1+3))
+            h1 = 2*(i+1) + alpha + beta
+            anew = 2/(h1+2) * np.sqrt((i+2)*(i+2+alpha+beta)*(i+2+alpha)*(i+2+beta) / (h1+1)/(h1+3))
             bnew = -(alpha**2 - beta**2) / h1 / (h1+2)
             
             PL[i+2, :] = 1/anew * (-aold*PL[i, :] + (x-bnew)*PL[i+1, :])
             aold = anew
-        
-        return PL[N, :].reshape(-1, 1)
+        return PL[N, :]
 
     @staticmethod
     def JacobiGL(alpha, beta, N):
@@ -58,11 +364,50 @@ class Elements:
         if N == 1:
             return np.array([-1.0, 1.0])
         
-        # For now, using a placeholder. In a real implementation, 
-        # you'd want to use JacobiGQ
-        xint = np.linspace(-1, 1, N-1)
+        xint, w = Elements.JacobiGQ(alpha+1, beta+1, N-2)
         return np.concatenate([[-1], xint, [1]])
 
+    @staticmethod
+    def JacobiGQ(alpha, beta, N):
+        # Purpose: Compute the N'th order Gauss quadrature points, x,
+        # and weights, w, associated with the Jacobi polynomial
+
+        if N == 0:
+            x = np.array([-(alpha - beta) / (alpha + beta + 2)])
+            w = np.array([2])
+            return x, w
+
+        # Form symmetric matrix from recurrence
+        J = np.zeros((N+1, N+1))
+        h1 = 2 * np.arange(N+1) + alpha + beta
+
+        # Diagonal entries
+        J += np.diag(-1/2 * (alpha**2 - beta**2) / (h1 + 2) / h1)
+
+        # Off-diagonal entries
+        J += np.diag(2 / (h1[:-1] + 2) * np.sqrt(
+            (np.arange(1, N+1)) * 
+            ((np.arange(1, N+1)) + alpha + beta) * 
+            ((np.arange(1, N+1)) + alpha) * 
+            ((np.arange(1, N+1)) + beta) / 
+            (h1[:-1] + 1) / (h1[:-1] + 3)
+        ), k=1)
+
+        # Make symmetric
+        if alpha + beta < 10 * np.finfo(float).eps:
+            J[0, 0] = 0.0
+        J = J + J.T
+
+        # Compute quadrature by eigenvalue solve
+        eigenvalues, eigenvectors = np.linalg.eigh(J)
+        x = eigenvalues
+
+        w = (eigenvectors[0, :]**2 * 2**(alpha + beta + 1) / 
+             (alpha + beta + 1) * 
+             gamma(alpha + 1) * gamma(beta + 1) / 
+             gamma(alpha + beta + 1))
+
+        return x, w
     @staticmethod
     def Vandermonde1D(N, r):
         """Initialize the 1D Vandermonde Matrix"""
@@ -100,13 +445,13 @@ class Elements:
         
         # Evaluate Lagrange polynomial at rout
         rout = np.asarray(rout)
-        Pmat = np.column_stack([Elements.JacobiP(rout, 0, 0, i).flatten() for i in range(N+1)])
+        Pmat = np.stack([Elements.JacobiP(rout, 0, 0, i).flatten() for i in range(N+1)])
         
         # Solve for Lagrange interpolation matrix
-        Lmat = np.linalg.solve(Veq.T, Pmat.T).T
+        Lmat = np.linalg.solve(Veq.T, Pmat)
         
         # Compute warp factor
-        warp = Lmat @ (LGLr - req)
+        warp = Lmat.T @ (LGLr - req)
         
         # Scale factor
         zerof = np.abs(rout) < 1.0 - 1.0e-10
@@ -148,7 +493,12 @@ class Elements:
         """
         Convert a 2D mesh in r-s coordinates to a 2D mesh in a-b coordinates.
         """
-        a = np.where(s != 1, 2 * (1 + r) / (1 - s) - 1, -1)
+        a = np.zeros_like(r)
+        for n in range(len(r)):
+            if s[n] != 1:
+                a[n] = 2 * (1 + r[n]) / (1 - s[n]) - 1
+            else:
+                a[n] = -1
         b = s
         return a, b
     
@@ -275,12 +625,12 @@ class Elements:
         a, b = np.asarray(a), np.asarray(b)
 
         # Compute Jacobi polynomials
-        h1 = Elements.JacobiP(a, 0, 0, i)
-        h2 = Elements.JacobiP(b, 2*i+1, 0, j)
+
+        h1 = Elements.JacobiP(a, 0, 0, i).flatten()
+        h2 = Elements.JacobiP(b, 2*i+1, 0, j).flatten()
 
         # Compute polynomial values
         P = np.sqrt(2.0) * h1 * h2 * (1-b)**i
-
         return P
 
     @staticmethod
@@ -302,6 +652,7 @@ class Elements:
         V2D : ndarray
             2D Vandermonde matrix
         """
+
         r, s = np.asarray(r), np.asarray(s)
 
         # Total number of basis functions
@@ -544,10 +895,10 @@ class Elements:
             Derivatives in r and s directions
         """
         # Compute Jacobi polynomials and their derivatives
-        fa = Elements.JacobiP(a, 0, 0, id)
-        dfa = Elements.GradJacobiP(a, 0, 0, id)
-        gb = Elements.JacobiP(b, 2*id+1, 0, jd)
-        dgb = Elements.GradJacobiP(b, 2*id+1, 0, jd)
+        fa = Elements.JacobiP(a, 0, 0, id).flatten()
+        dfa = Elements.GradJacobiP(a, 0, 0, id).flatten()
+        gb = Elements.JacobiP(b, 2*id+1, 0, jd).flatten()
+        dgb = Elements.GradJacobiP(b, 2*id+1, 0, jd).flatten()
         
         # r-derivative
         dmodedr = dfa * gb
@@ -601,7 +952,7 @@ class Elements:
         return dP
 
     @staticmethod
-    def Lift2D(N, Np, Nfaces, Nfp, Fmask, r, V):
+    def Lift2D(N, Np, Nfaces, Nfp, Fmask, r, s, V):
         """
         Compute surface to volume lift term for DG formulation
         
@@ -617,7 +968,7 @@ class Elements:
             Number of points per face
         Fmask : ndarray
             Face mask indices
-        r : ndarray
+        r,s : ndarray
             Reference coordinates
         V : ndarray
             Vandermonde matrix
@@ -631,7 +982,7 @@ class Elements:
         Emat = np.zeros((Np, Nfaces * Nfp))
         
         # Process each face
-        for face in range(Nfaces):
+        for face in range(Nfaces-1):
             # Extract face coordinates
             faceR = r[Fmask[:, face]]
             
@@ -643,8 +994,23 @@ class Elements:
             
             # Populate Emat for this face
             Emat[Fmask[:, face], face*Nfp:(face+1)*Nfp] = massEdge
-        
+
+        # Extract face coordinates
+        faceS = s[Fmask[:, 2]]
+            
+        # Compute 1D Vandermonde matrix for the face
+        V1D = Elements.Vandermonde1D(N, faceS)
+            
+        # Compute mass matrix for the edge
+        massEdge = np.linalg.inv(V1D @ V1D.T)
+            
+        # Populate Emat for this face
+        Emat[Fmask[:, 2], 2*Nfp:(2+1)*Nfp] = massEdge
+
         # Compute LIFT matrix
         LIFT = V @ (V.T @ Emat)
         
         return LIFT
+    
+if __name__ == "__main__":
+    Elements('vortexA04.neu')
