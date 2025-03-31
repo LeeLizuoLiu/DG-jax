@@ -1,7 +1,9 @@
 import numpy as np
 import jax.numpy as jnp
 import math
-from utils import mesh_reader_gambit_2d
+from utils import mesh_reader_gambit_2d, MeshReaderGambitBC2D
+from constants import *
+
 import pdb
 
 
@@ -10,7 +12,7 @@ from scipy.special import gamma
 
 class Elements:
 
-    def __init__(self, mesh_path, order = 3):
+    def __init__(self, mesh_path, order = 1):
         # Finish the startup2D.m
         
         Np = (order + 1) * (order + 2) // 2
@@ -23,7 +25,7 @@ class Elements:
         V = self.Vandermonde2D(order, r, s)
         invV = np.linalg.inv(V)
         Dr, Ds = self.Dmatrices2D(order, r, s, V)
-        Nv, VX, VY, K, EToV = mesh_reader_gambit_2d(mesh_path)
+        Nv, VX, VY, K, EToV, BCType = MeshReaderGambitBC2D(mesh_path)
         x, y, Fmask, Fx, Fy = self.convert_coordinates(EToV, VX, VY, r, s, NODETOL)
         lift = self.Lift2D(order, Np, Nfaces, Nfp, Fmask, r, s, V)
         rx, sx, ry, sy, J = self.GeometricFactors2D(x, y, Dr, Ds)
@@ -32,9 +34,98 @@ class Elements:
         EToE, EToF = self.tiConnect2D(EToV)
         mapM, mapP, vmapM, vmapP, vmapB, mapB = self.BuildMaps2D(K, Np, Nfaces, Nfp, Fmask, EToE, EToF, EToV, VX, VY, x, y, NODETOL)
         Vr, Vs = self.GradVandermonde2D(order, r, s)
-        Drw = (V @ Vr.T) / (V @ V.T)
-        Dsw = (V @ Vs.T) / (V @ V.T) 
+        Drw = (V @ Vr.T) @ np.linalg.inv( (V @ V.T) )
+        Dsw = (V @ Vs.T) @ np.linalg.inv( (V @ V.T) )
 
+        bc_maps = self.BuildBCMaps2D(Nfp, BCType, vmapM)
+
+        self.Np = Np
+        self.Nfp = Nfp
+        self.Nfaces = Nfaces
+        self.NODETOL = NODETOL
+        self.x = x
+        self.y = y
+        self.r = r
+        self.s = s
+        self.V = V
+        self.invV = invV
+        self.Dr = Dr
+        self.Ds = Ds
+        self.rx = rx
+        self.sx = sx
+        self.ry = ry
+        self.sy = sy
+        self.J = J
+        self.nx = nx
+        self.ny = ny
+        self.sJ = sJ
+        self.Fscale = Fscale
+        self.EToE = EToE
+        self.EToF = EToF
+        self.mapM = mapM
+        self.mapP = mapP
+        self.vmapM = vmapM
+        self.vmapP = vmapP
+        self.vmapB = vmapB
+        self.mapB = mapB
+        self.Vr = Vr
+        self.Vs = Vs
+        self.Drw = Drw
+        self.Dsw = Dsw
+        self.bc_maps = bc_maps
+        self.lift = lift
+        self.Nv = Nv
+        self.Fx = Fx
+        self.Fy = Fy
+
+    @staticmethod
+    def BuildBCMaps2D(Nfp, BCType, vmapM):
+        """
+        Build specialized nodal maps for various types of boundary conditions.
+
+        Args:
+            Nfp: Number of points per face
+            BCType: Boundary condition types array
+            vmapM: Volume map for the "-" trace
+
+        Returns:
+            bc_maps: Dictionary containing all boundary maps and vmaps
+        """
+        # Create label of face nodes with boundary types from BCType
+
+        bct = BCType.T
+        bnodes = np.outer(np.ones(Nfp), bct.flatten(order='F'))
+        bnodes = bnodes.flatten(order='F')
+
+        # Initialize dictionary to store all maps and vmaps
+        bc_maps = {}
+
+        # Find location of boundary nodes in face and volume node lists
+        bc_maps['mapI'] = np.where(bnodes == In)[0]
+        bc_maps['vmapI'] = vmapM[bc_maps['mapI']]
+
+        bc_maps['mapO'] = np.where(bnodes == Out)[0]
+        bc_maps['vmapO'] = vmapM[bc_maps['mapO']]
+
+        bc_maps['mapW'] = np.where(bnodes == Wall)[0]
+        bc_maps['vmapW'] = vmapM[bc_maps['mapW']]
+
+        bc_maps['mapF'] = np.where(bnodes == Far)[0]
+        bc_maps['vmapF'] = vmapM[bc_maps['mapF']]
+
+        bc_maps['mapC'] = np.where(bnodes == Cyl)[0]
+        bc_maps['vmapC'] = vmapM[bc_maps['mapC']]
+
+        bc_maps['mapD'] = np.where(bnodes == Dirichlet)[0]
+        bc_maps['vmapD'] = vmapM[bc_maps['mapD']]
+
+        bc_maps['mapN'] = np.where(bnodes == Neuman)[0]
+        bc_maps['vmapN'] = vmapM[bc_maps['mapN']]
+
+        bc_maps['mapS'] = np.where(bnodes == Slip)[0]
+        bc_maps['vmapS'] = vmapM[bc_maps['mapS']]
+
+        return bc_maps
 
     @staticmethod
     def BuildMaps2D(K, Np, Nfaces, Nfp, Fmask, EToE, EToF, EToV, VX, VY, x, y, NODETOL):
