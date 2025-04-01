@@ -39,8 +39,10 @@ class Elements:
 
         bc_maps = self.BuildBCMaps2D(Nfp, BCType, vmapM)
 
+        self.N = order
         self.Np = Np
         self.Nfp = Nfp
+        self.K = K
         self.Nfaces = Nfaces
         self.NODETOL = NODETOL
         self.x = x
