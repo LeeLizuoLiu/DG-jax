@@ -1,4 +1,5 @@
 from Euler2D import *
+import pdb
 def convergence_rate_test():
     """
     Test the convergence rate of the Euler 2D solver with respect to polynomial order.
@@ -54,37 +55,6 @@ def convergence_rate_test():
         rates.append(rate)
         print(f"Order {orders[i-1]} → {orders[i]}: Convergence rate = {rate:.4f}")
     
-    # Plot results
-    plt.figure(figsize=(12, 10))
-    
-    # Error vs DOFs plot
-    plt.subplot(2, 1, 1)
-    plt.loglog(dofs, errors, 'o-', linewidth=2, markersize=8)
-    plt.xlabel('Degrees of Freedom (DOF)')
-    plt.ylabel('L2 Error')
-    plt.title('Convergence of Isentropic Vortex Solution')
-    plt.grid(True, which="both", ls="--")
-    
-    # Annotate with orders
-    for i, order in enumerate(orders):
-        plt.annotate(f'p={order}', 
-                    xy=(dofs[i], errors[i]),
-                    xytext=(10, 0), 
-                    textcoords='offset points')
-    
-    # Convergence rate plot
-    plt.subplot(2, 1, 2)
-    plt.bar(range(1, len(orders)), rates, width=0.5)
-    plt.xlabel('Order Transition')
-    plt.ylabel('Convergence Rate')
-    plt.title('Convergence Rates Between Orders')
-    plt.xticks(range(1, len(orders)), [f'{orders[i-1]}→{orders[i]}' for i in range(1, len(orders))])
-    plt.grid(True, which="both", ls="--", axis='y')
-    
-    plt.tight_layout()
-    plt.savefig('euler_2d_convergence_test.png', dpi=300)
-    plt.show()
-
 def calculate_l2_error(solver, numerical, exact):
     """
     Calculate the L2 error between numerical and exact solutions.
@@ -102,7 +72,6 @@ def calculate_l2_error(solver, numerical, exact):
     
     # Calculate squared difference
     diff_squared = (numerical - exact) ** 2
-    
     # Integrate the squared difference over the domain
     error_squared = 0
     for k in range(solver.K):

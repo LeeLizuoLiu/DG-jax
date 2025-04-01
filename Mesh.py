@@ -1,11 +1,10 @@
 import numpy as np
 import jax.numpy as jnp
 import math
-from utils import mesh_reader_gambit_2d, MeshReaderGambitBC2D
+from utils import mesh_reader_gambit_2d, MeshReaderGambitBC2D, compare_matlab_numpy_results
 from constants import *
 
 import pdb
-
 
 import numpy as np
 from scipy.special import gamma
@@ -18,7 +17,7 @@ class Elements:
         Np = (order + 1) * (order + 2) // 2
         Nfp = order + 1
         Nfaces = 3
-        NODETOL = 1.0e-10
+        NODETOL = 1.0e-12
 
         x, y = self.Nodes2D(order)
         r, s = self.xytors(x, y)
@@ -27,7 +26,7 @@ class Elements:
         Dr, Ds = self.Dmatrices2D(order, r, s, V)
         Nv, VX, VY, K, EToV, BCType = MeshReaderGambitBC2D(mesh_path)
         x, y, Fmask, Fx, Fy = self.convert_coordinates(EToV, VX, VY, r, s, NODETOL)
-        lift = self.Lift2D(order, Np, Nfaces, Nfp, Fmask, r, s, V)
+        LIFT = self.Lift2D(order, Np, Nfaces, Nfp, Fmask, r, s, V)
         rx, sx, ry, sy, J = self.GeometricFactors2D(x, y, Dr, Ds)
         nx, ny, sJ = self.Normals2D(Dr, Ds, x, y, Fmask, Nfp, K)
         Fscale = sJ / J[Fmask.flatten(order='F'),:]
@@ -36,7 +35,6 @@ class Elements:
         Vr, Vs = self.GradVandermonde2D(order, r, s)
         Drw = (V @ Vr.T) @ np.linalg.inv( (V @ V.T) )
         Dsw = (V @ Vs.T) @ np.linalg.inv( (V @ V.T) )
-
         bc_maps = self.BuildBCMaps2D(Nfp, BCType, vmapM)
 
         self.N = order
@@ -75,7 +73,7 @@ class Elements:
         self.Drw = Drw
         self.Dsw = Dsw
         self.bc_maps = bc_maps
-        self.lift = lift
+        self.LIFT = LIFT 
         self.Nv = Nv
         self.Fx = Fx
         self.Fy = Fy
@@ -151,7 +149,7 @@ class Elements:
         vmapP = np.zeros((Nfp, Nfaces, K), dtype=int)
 
         mapM = np.arange(0, K*Nfp*Nfaces)
-        mapP = mapM.reshape(Nfp, Nfaces, K, order='F')
+        mapP = np.arange(0, K*Nfp*Nfaces).reshape((Nfp, Nfaces, K), order='F')
         # find index of face nodes with respect to volume node ordering
         for k1 in range(K):
             for f1 in range(Nfaces):
@@ -278,110 +276,120 @@ class Elements:
         return EToE, EToF
 
     @staticmethod
-    def Normals2D(Dr, Ds, x, y, Fmask, Nfp, K):
-        """
-        Compute outward pointing normals at elements faces and surface Jacobians
-
-        Parameters:
-        Dr : numpy array
-            Derivative matrix in r direction
-        Ds : numpy array
-            Derivative matrix in s direction
-        x : numpy array
-            x coordinates
-        y : numpy array
-            y coordinates
-        Fmask : numpy array
-            Face mask indices
-        Nfp : int
-            Number of face points
-        K : int
-            Number of elements
-
-        Returns:
-        nx, ny : numpy arrays
-            Normalized normal vectors
-        sJ : numpy array
-            Surface Jacobians
-        """
-        # Compute geometric factors
-        xr = Dr @ x
-        yr = Dr @ y
-        xs = Ds @ x
-        ys = Ds @ y
-        J = xr * ys - xs * yr
-        Fmask = Fmask.flatten(order='F')
-
-        # Interpolate geometric factors to face nodes
-        fxr = xr[Fmask, :]
-        fxs = xs[Fmask, :]
-        fyr = yr[Fmask, :]
-        fys = ys[Fmask, :]
-
-        # Initialize normal vectors
-        nx = np.zeros((3*Nfp, K))
-        ny = np.zeros((3*Nfp, K))
-
-        # Define face indices
-        fid1 = np.arange(Nfp)
-        fid2 = np.arange(Nfp, 2*Nfp)
-        fid3 = np.arange(2*Nfp, 3*Nfp)
-
-        # Face 1
-        nx[fid1, :] = fyr[fid1, :]
-        ny[fid1, :] = -fxr[fid1, :]
-
-        # Face 2
-        nx[fid2, :] = fys[fid2, :] - fyr[fid2, :]
-        ny[fid2, :] = -fxs[fid2, :] + fxr[fid2, :]
-
-        # Face 3
-        nx[fid3, :] = -fys[fid3, :]
-        ny[fid3, :] = fxs[fid3, :]
-
-        # Normalize
-        sJ = np.sqrt(nx**2 + ny**2)
-        nx = nx / sJ
-        ny = ny / sJ
-
-        return nx, ny, sJ
-    @staticmethod
     def GeometricFactors2D(x, y, Dr, Ds):
         """
-        Compute the metric elements for the local mappings of the elements
-
-        Parameters:
-        x : numpy array
-            x coordinates
-        y : numpy array
-            y coordinates
-        Dr : numpy array
-            Derivative matrix in r direction
-        Ds : numpy array
-            Derivative matrix in s direction
-
-        Returns:
-        rx, sx, ry, sy : numpy arrays
-            Metric terms
-        J : numpy array
-            Jacobian
+        Compute the metric elements with minimal intermediate operations
         """
-        # Calculate geometric factors
-        xr = Dr @ x  # Matrix multiplication in Python
-        xs = Ds @ x
-        yr = Dr @ y
-        ys = Ds @ y
-
+        # Preallocate arrays to avoid reallocations
+        shape = x.shape
+        xr = np.empty(shape)
+        xs = np.empty(shape)
+        yr = np.empty(shape)
+        ys = np.empty(shape)
+        
+        # Compute derivatives directly
+        for i in range(shape[0]):
+            for j in range(shape[1]):
+                xr_sum = 0.0
+                xs_sum = 0.0
+                yr_sum = 0.0
+                ys_sum = 0.0
+                
+                for k in range(shape[0]):
+                    xr_sum += Dr[i, k] * x[k, j]
+                    xs_sum += Ds[i, k] * x[k, j]
+                    yr_sum += Dr[i, k] * y[k, j]
+                    ys_sum += Ds[i, k] * y[k, j]
+                
+                xr[i, j] = xr_sum
+                xs[i, j] = xs_sum
+                yr[i, j] = yr_sum
+                ys[i, j] = ys_sum
+        
         # Compute Jacobian
-        J = -xs * yr + xr * ys
-
+        J = xr * ys - xs * yr
+        
         # Compute metric terms
         rx = ys / J
         sx = -yr / J
         ry = -xs / J
         sy = xr / J
-
+        
         return rx, sx, ry, sy, J
+    
+    @staticmethod
+    def Normals2D(Dr, Ds, x, y, Fmask, Nfp, K):
+        """
+        Compute outward pointing normals with minimal intermediate operations
+        """
+        # First compute geometric factors
+        xr = np.empty_like(x)
+        xs = np.empty_like(x)
+        yr = np.empty_like(y)
+        ys = np.empty_like(y)
+        
+        # Manual matrix multiplication
+        for i in range(x.shape[0]):
+            for j in range(x.shape[1]):
+                xr_sum = 0.0
+                xs_sum = 0.0
+                yr_sum = 0.0
+                ys_sum = 0.0
+                
+                for k in range(x.shape[0]):
+                    xr_sum += Dr[i, k] * x[k, j]
+                    xs_sum += Ds[i, k] * x[k, j]
+                    yr_sum += Dr[i, k] * y[k, j]
+                    ys_sum += Ds[i, k] * y[k, j]
+                
+                xr[i, j] = xr_sum
+                xs[i, j] = xs_sum
+                yr[i, j] = yr_sum
+                ys[i, j] = ys_sum
+        
+        # Flatten Fmask
+        Fmask_flat = Fmask.flatten(order='F')
+        
+        # Initialize normal vectors
+        nx = np.zeros((3*Nfp, K))
+        ny = np.zeros((3*Nfp, K))
+        
+        # Define face indices
+        fid1 = np.arange(Nfp)
+        fid2 = np.arange(Nfp, 2*Nfp)
+        fid3 = np.arange(2*Nfp, 3*Nfp)
+        
+        # Apply face calculations directly
+        for i in range(Nfp):
+            idx1 = Fmask_flat[i]
+            for k in range(K):
+                nx[i, k] = yr[idx1, k]
+                ny[i, k] = -xr[idx1, k]
+        
+        for i in range(Nfp):
+            idx2 = Fmask_flat[i + Nfp]
+            for k in range(K):
+                nx[i + Nfp, k] = ys[idx2, k] - yr[idx2, k]
+                ny[i + Nfp, k] = -xs[idx2, k] + xr[idx2, k]
+        
+        for i in range(Nfp):
+            idx3 = Fmask_flat[i + 2*Nfp]
+            for k in range(K):
+                nx[i + 2*Nfp, k] = -ys[idx3, k]
+                ny[i + 2*Nfp, k] = xs[idx3, k]
+        
+        # Compute surface Jacobian and normalize
+        sJ = np.sqrt(nx**2 + ny**2)
+        
+        # Normalize carefully
+        for i in range(3*Nfp):
+            for k in range(K):
+                if sJ[i, k] > 1e-14:  # Avoid division by very small numbers
+                    nx[i, k] /= sJ[i, k]
+                    ny[i, k] /= sJ[i, k]
+        
+        return nx, ny, sJ
+
     @staticmethod
     def convert_coordinates(EToV, VX, VY, r, s, NODETOL):
         # build coordinates of all the nodes
@@ -616,7 +624,7 @@ class Elements:
         
         # Set optimized parameter, alpha, depending on order N
         if N < 16:
-            alpha = alpopt[N]
+            alpha = alpopt[N-1]
         else:
             alpha = 5/3
         
@@ -1106,4 +1114,5 @@ class Elements:
         return LIFT
     
 if __name__ == "__main__":
-    Elements('vortexA04.neu')
+    E = Elements('vortexA04.neu', order=5)
+    compare_matlab_numpy_results('startup', E)

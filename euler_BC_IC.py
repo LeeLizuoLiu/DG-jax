@@ -1,23 +1,34 @@
 import numpy as np
 
-def isentropic_vortex_bc_2d(xin, yin, nxin, nyin, mapI, mapO, mapW, mapC, Q, time):
+def isentropic_vortex_bc_2d(xin, yin, nxin, nyin, mapI, mapO, mapW, mapC, Q, time, DEBUG=False):
     """
     Impose boundary conditions on 2D Euler equations on weak form
     """
     # Get the exact solution at the boundary points
     Qbc = isentropic_vortex_ic_2d(xin, yin, time)
-
+    
     # Combine all boundary maps
     mapB = np.concatenate([mapI, mapO, mapW])
-
-    # Apply boundary conditions for each component
-    for n in range(4):
-        Qn = Q[:,:,n].copy()
-        Qbcn = Qbc[:,:,n]
-        Qn.flatten(order='F')[mapB] = Qbcn.flatten(order='F')[mapB]
-        Q[:,:,n] = Qn
-
-    return Q
+    
+    # Create a copy to avoid modifying the input
+    Q_new = Q.copy()
+    
+    # Get linear indices for the 3D array
+    nx, ny = Q.shape[:2]
+    linear_indices = np.zeros(len(mapB), dtype=int)
+    
+    for i, idx in enumerate(mapB):
+        # Convert 1D Fortran-order index to 2D indices
+        col = idx // nx
+        row = idx % nx
+        # For each boundary point, update all 4 components directly
+        for n in range(4):
+            Q_new[row, col, n] = Qbc[row, col, n]
+    
+    if DEBUG:
+        return Q_new, Qbc, mapB
+    else:
+        return Q_new
 
 def isentropic_vortex_ic_2d(x, y, time):
     """
