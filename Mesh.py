@@ -320,75 +320,93 @@ class Elements:
     @staticmethod
     def Normals2D(Dr, Ds, x, y, Fmask, Nfp, K):
         """
-        Compute outward pointing normals with minimal intermediate operations
+        Compute outward pointing normals at elements faces and surface Jacobians
+        Parameters:
+        Dr : numpy array
+            Derivative matrix in r direction
+        Ds : numpy array
+            Derivative matrix in s direction
+        x : numpy array
+            x coordinates
+        y : numpy array
+            y coordinates
+        Fmask : numpy array
+            Face mask indices
+        Nfp : int
+            Number of face points
+        K : int
+            Number of elements
+        Returns:
+        nx, ny : numpy arrays
+            Normalized normal vectors
+        sJ : numpy array
+            Surface Jacobians
         """
-        # First compute geometric factors
-        xr = np.empty_like(x)
-        xs = np.empty_like(x)
-        yr = np.empty_like(y)
-        ys = np.empty_like(y)
-        
-        # Manual matrix multiplication
-        for i in range(x.shape[0]):
-            for j in range(x.shape[1]):
-                xr_sum = 0.0
-                xs_sum = 0.0
-                yr_sum = 0.0
-                ys_sum = 0.0
-                
-                for k in range(x.shape[0]):
-                    xr_sum += Dr[i, k] * x[k, j]
-                    xs_sum += Ds[i, k] * x[k, j]
-                    yr_sum += Dr[i, k] * y[k, j]
-                    ys_sum += Ds[i, k] * y[k, j]
-                
-                xr[i, j] = xr_sum
-                xs[i, j] = xs_sum
-                yr[i, j] = yr_sum
-                ys[i, j] = ys_sum
-        
-        # Flatten Fmask
-        Fmask_flat = Fmask.flatten(order='F')
-        
+        # Compute geometric factors
+        xr = Dr @ x
+        yr = Dr @ y
+        xs = Ds @ x
+        ys = Ds @ y
+        J = xr * ys - xs * yr
+        Fmask = Fmask.flatten(order='F')
+        # Interpolate geometric factors to face nodes
+        fxr = xr[Fmask, :]
+        fxs = xs[Fmask, :]
+        fyr = yr[Fmask, :]
+        fys = ys[Fmask, :]
         # Initialize normal vectors
         nx = np.zeros((3*Nfp, K))
         ny = np.zeros((3*Nfp, K))
-        
         # Define face indices
         fid1 = np.arange(Nfp)
         fid2 = np.arange(Nfp, 2*Nfp)
         fid3 = np.arange(2*Nfp, 3*Nfp)
-        
-        # Apply face calculations directly
-        for i in range(Nfp):
-            idx1 = Fmask_flat[i]
-            for k in range(K):
-                nx[i, k] = yr[idx1, k]
-                ny[i, k] = -xr[idx1, k]
-        
-        for i in range(Nfp):
-            idx2 = Fmask_flat[i + Nfp]
-            for k in range(K):
-                nx[i + Nfp, k] = ys[idx2, k] - yr[idx2, k]
-                ny[i + Nfp, k] = -xs[idx2, k] + xr[idx2, k]
-        
-        for i in range(Nfp):
-            idx3 = Fmask_flat[i + 2*Nfp]
-            for k in range(K):
-                nx[i + 2*Nfp, k] = -ys[idx3, k]
-                ny[i + 2*Nfp, k] = xs[idx3, k]
-        
-        # Compute surface Jacobian and normalize
+        # Face 1
+        nx[fid1, :] = fyr[fid1, :]
+        ny[fid1, :] = -fxr[fid1, :]
+        # Face 2
+        nx[fid2, :] = fys[fid2, :] - fyr[fid2, :]
+        ny[fid2, :] = -fxs[fid2, :] + fxr[fid2, :]
+        # Face 3
+        nx[fid3, :] = -fys[fid3, :]
+        ny[fid3, :] = fxs[fid3, :]
+        # Normalize
         sJ = np.sqrt(nx**2 + ny**2)
-        
-        # Normalize carefully
-        for i in range(3*Nfp):
-            for k in range(K):
-                if sJ[i, k] > 1e-14:  # Avoid division by very small numbers
-                    nx[i, k] /= sJ[i, k]
-                    ny[i, k] /= sJ[i, k]
-        
+        nx = nx / sJ
+        ny = ny / sJ
         return nx, ny, sJ
+    @staticmethod
+    def GeometricFactors2D(x, y, Dr, Ds):
+        """
+        Compute the metric elements for the local mappings of the elements
+        Parameters:
+        x : numpy array
+            x coordinates
+        y : numpy array
+            y coordinates
+        Dr : numpy array
+            Derivative matrix in r direction
+        Ds : numpy array
+            Derivative matrix in s direction
+        Returns:
+        rx, sx, ry, sy : numpy arrays
+            Metric terms
+        J : numpy array
+            Jacobian
+        """
+        # Calculate geometric factors
+        xr = Dr @ x  # Matrix multiplication in Python
+        xs = Ds @ x
+        yr = Dr @ y
+        ys = Ds @ y
+        # Compute Jacobian
+        J = -xs * yr + xr * ys
+        # Compute metric terms
+        rx = ys / J
+        sx = -yr / J
+        ry = -xs / J
+        sy = xr / J
+        return rx, sx, ry, sy, J
 
     @staticmethod
     def convert_coordinates(EToV, VX, VY, r, s, NODETOL):
