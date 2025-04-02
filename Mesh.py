@@ -276,48 +276,6 @@ class Elements:
         return EToE, EToF
 
     @staticmethod
-    def GeometricFactors2D(x, y, Dr, Ds):
-        """
-        Compute the metric elements with minimal intermediate operations
-        """
-        # Preallocate arrays to avoid reallocations
-        shape = x.shape
-        xr = np.empty(shape)
-        xs = np.empty(shape)
-        yr = np.empty(shape)
-        ys = np.empty(shape)
-        
-        # Compute derivatives directly
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                xr_sum = 0.0
-                xs_sum = 0.0
-                yr_sum = 0.0
-                ys_sum = 0.0
-                
-                for k in range(shape[0]):
-                    xr_sum += Dr[i, k] * x[k, j]
-                    xs_sum += Ds[i, k] * x[k, j]
-                    yr_sum += Dr[i, k] * y[k, j]
-                    ys_sum += Ds[i, k] * y[k, j]
-                
-                xr[i, j] = xr_sum
-                xs[i, j] = xs_sum
-                yr[i, j] = yr_sum
-                ys[i, j] = ys_sum
-        
-        # Compute Jacobian
-        J = xr * ys - xs * yr
-        
-        # Compute metric terms
-        rx = ys / J
-        sx = -yr / J
-        ry = -xs / J
-        sy = xr / J
-        
-        return rx, sx, ry, sy, J
-    
-    @staticmethod
     def Normals2D(Dr, Ds, x, y, Fmask, Nfp, K):
         """
         Compute outward pointing normals at elements faces and surface Jacobians
