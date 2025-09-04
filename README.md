@@ -1,7 +1,7 @@
 # DGax: Discontinuous Galerkin Solver for 2D Euler Equations
 
 ## Overview
-This project implements a Discontinuous Galerkin (DG) solver for 2D Euler equations. It includes modules for mesh generation, boundary condition handling, and numerical flux computation.
+This project implements a Discontinuous Galerkin (DG) solver for 2D Euler equations. This is based on the matlab code [https://github.com/tcew/nodal-dg](https://github.com/tcew/nodal-dg) It includes modules for mesh generation, boundary condition handling, and numerical flux computation.
 
 ## Requirements
 To run this project, you need the following Python packages installed:
