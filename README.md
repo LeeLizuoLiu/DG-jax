@@ -15,7 +15,7 @@ pip install numpy scipy
 ```
 
 ## Project Structure
-- **`Mesh.py`**: Contains the `Elements` class for mesh generation and geometric computations.
+- **`Mesh.py`**: Contains the `Elements` class for mesh geometric computations.
 - **`Euler2D.py`**: Implements the 2D Euler solver using the DG method.
 - **`euler_BC_IC.py`**: Defines boundary and initial conditions for the Euler equations.
 - **`utils.py`**: Utility functions for reading mesh files and comparing results with MATLAB outputs.
@@ -23,19 +23,13 @@ pip install numpy scipy
 
 ## Usage
 
-### 1. Test Mesh Generation
-To test the mesh generation and geometric computations, run:
-```bash
-python Mesh.py
-```
-
-### 2. Solve 2D Euler Equations
+### 1. Solve 2D Euler Equations
 To solve the 2D Euler equations using the DG method, run:
 ```bash
 python Euler2D.py
 ```
 
-### 3. Compare Results with MATLAB
+### 2. Compare Results with MATLAB
 If you have MATLAB `.mat` files for comparison, ensure they are in the same directory and run the corresponding scripts to compare results.
 
 ## Notes
