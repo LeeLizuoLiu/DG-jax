@@ -160,6 +160,18 @@ class Elements:
         for k1 in range(K):
             for f1 in range(Nfaces):
                 # find neighbor
+                """
+                In short, **`f2` is the local index of the face in the neighboring element (`k2`) that is shared with the current element (`k1`)**.
+
+                Think of it like two rooms sharing a wall.
+                
+                  * `k1` is your current room.
+                  * `f1` is one of the walls in your room (e.g., your "north wall").
+                  * `k2` is the room on the other side of that wall.
+                  * `f2` is what the *neighbor* calls that same shared wall (e.g., their "south wall").
+                
+                The `EToF` (Element-to-Face) array is like a map that tells you this information. `EToF[k1, f1]` looks up which of the neighbor's walls corresponds to wall `f1` of your current room `k1`.
+                """
                 k2 = EToE[k1, f1]
                 f2 = EToF[k1, f1]
 
