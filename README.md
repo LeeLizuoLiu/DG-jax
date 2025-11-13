@@ -6,35 +6,38 @@ This project implements a Discontinuous Galerkin (DG) solver for 2D Euler equati
 ## Requirements
 To run this project, you need the following Python packages installed:
 
+- `recurivenodes`
 - `numpy`
 - `scipy`
 
 You can install the required packages using the following command:
 ```bash
-pip install numpy scipy
+pip install numpy recurisivenodes
 ```
 
-## Project Structure
-- **`Mesh.py`**: Contains the `Elements` class for mesh geometric computations.
-- **`Euler2D.py`**: Implements the 2D Euler solver using the DG method.
-- **`euler_BC_IC.py`**: Defines boundary and initial conditions for the Euler equations.
-- **`utils.py`**: Utility functions for reading mesh files and comparing results with MATLAB outputs.
-- **`constants.py`**: Contains constants used throughout the project.
+## Package Structure
+- **`mesh/`**: Contains the `mesh` and `TriMesh` class for mesh geometric computations.
+- **`riemann_solvers/`**: Implements the riemann solvers for DG.
+- **`integrators/`**: Defines SSPRK type of integrators.
+- **`equations/`**: Equations implemented, currently 2D Euler equations only.
+- **`limiters/`**: Limiters for DG Methods.
 
 ## Usage
 
-### 1. Solve 2D Euler Equations
-To solve the 2D Euler equations using the DG method, run:
-```bash
-python Euler2D.py
-```
-
-### 2. Compare Results with MATLAB
-If you have MATLAB `.mat` files for comparison, ensure they are in the same directory and run the corresponding scripts to compare results.
+Not yet.
 
 ## Notes
-- Ensure the mesh file (e.g., `vortexA04.neu`) is in the same directory as the scripts.
+- Ensure the mesh file (e.g., `*.neu`) is in the same directory as the scripts.
 - The project is designed to work with Gambit `.neu` mesh files.
 
 ## License
-This project is licensed under the MIT License.
+Shield: [![CC BY-NC 4.0][cc-by-nc-shield]][cc-by-nc]
+
+This work is licensed under a
+[Creative Commons Attribution-NonCommercial 4.0 International License][cc-by-nc].
+
+[![CC BY-NC 4.0][cc-by-nc-image]][cc-by-nc]
+
+[cc-by-nc]: https://creativecommons.org/licenses/by-nc/4.0/
+[cc-by-nc-image]: https://licensebuttons.net/l/by-nc/4.0/88x31.png
+[cc-by-nc-shield]: https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg
