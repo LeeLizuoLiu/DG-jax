@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "DGax"
+version = "0.0.0"  # or whatever version you want
+description = "Discontinuous Galerkin Method based on Jax"
+requires-python = ">=3.8"
+dependencies = [
+    "jax",  # add your actual dependencies here
+    "recursivenodes",
+]
+
+[tool.setuptools.packages.find]
+include = ["DGax*"]
+where = ["src"]  # <-- THIS IS THE KEY LINE

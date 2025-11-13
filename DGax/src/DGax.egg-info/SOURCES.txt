@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/DGax/__init__.py
+src/DGax/initial_conditions.py
+src/DGax/solver.py
+src/DGax.egg-info/PKG-INFO
+src/DGax.egg-info/SOURCES.txt
+src/DGax.egg-info/dependency_links.txt
+src/DGax.egg-info/requires.txt
+src/DGax.egg-info/top_level.txt
+src/DGax/mesh/__init__.py
+src/DGax/mesh/connectivity.py
+src/DGax/mesh/geometry.py
+src/DGax/mesh/io.py
