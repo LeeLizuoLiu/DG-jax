@@ -10,7 +10,6 @@ from recursivenodes.polynomials import proriolkoornwinderdubinervandermondegrad 
 from recursivenodes.polynomials import proriolkoornwinderdubinervandermonde as Vandermonde
 from .mesh import Mesh
 from .io import read_gambit_neu
-import pdb
 
 @dataclass(frozen=True)
 class TriMesh(Mesh):
@@ -264,7 +263,6 @@ def _compute_geometric_factors(
     Ds: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute metric terms and Jacobian"""
-    pdb.set_trace()
     xr = Dr @ x
     xs = Ds @ x
     yr = Dr @ y
