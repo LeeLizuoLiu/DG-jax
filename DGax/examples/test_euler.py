@@ -9,6 +9,7 @@ jax.config.update("jax_enable_x64", True)  # Enable double precision
 jax.config.update("jax_debug_nans", True)  # Enable NaN debugging
 from functools import partial
 
+import pdb
 
 def isentropic_vortex_bc_2d(xin, yin, nxin, nyin, mapI, mapO, mapW, mapC, Q, time):
     """
@@ -173,31 +174,44 @@ class Euler_2D:
         Q_flat = Q.reshape(-1, 4, order='F')
         QM = Q_flat[mapM, :]
         oQP = Q_flat[mapP, :]
-
         # 2.2 Set boundary conditions by modifying positive traces
         QP = self.bc(self.mesh.Fx, self.mesh.Fy, self.mesh.face_normals[...,0], self.mesh.face_normals[...,1], 
                           self.mesh.bc_maps['in'], self.mesh.bc_maps['out'], self.mesh.bc_maps['wall'], self.mesh.bc_maps['cylinder'], oQP, time)
 
-        # 2.3 Evaluate primitive variables & flux functions at '-' and '+' traces
-        fM, gM, rhoM, uM, vM, pM = euler_fluxes_2d(QM, gamma)
-        fP, gP, rhoP, uP, vP, pP = euler_fluxes_2d(QP, gamma)
+        QM = QM.reshape(self.mesh.Nfp, self.mesh.Nfaces, self.mesh.K, QM.shape[-1], order='F') # shape = [Nfp, Nfaces, K, n_vars]
+        QP = QP.reshape(self.mesh.Nfp, self.mesh.Nfaces, self.mesh.K, QP.shape[-1], order='F') # shape = [Nfp, Nfaces, K, n_vars]
 
-        # 2.4 Compute local Lax-Friedrichs/Rusanov numerical fluxes
+        surface_integral = self.surface_integral(QM, QP, gamma)
+        rhsQ = volume_integral + surface_integral
+        rhsQ = jnp.einsum('ij, jkn -> ikn', self.Filt, rhsQ) 
+        return rhsQ
+
+    def lax_friedrichs_flux(self, QM, QP, face_normals, gamma):
+        # QM, QP shape = [Nfp, n_vars]
+        # 2.3 Evaluate primitive variables & flux functions at '-' and '+' traces
+        lambda_max = self.max_local_speed(QM, QP, gamma) # lambda_max shape = [1]
+        # 2.5 Lift fluxes
+        fP, gP, _, _, _, _ = euler_fluxes_2d(QM, gamma) # fM, gM shape = [Nfp, n_vars]
+        fM, gM, _, _, _, _ = euler_fluxes_2d(QP, gamma) # fP, gP shape = [Nfp, n_vars]
+
+        face_flux = jnp.stack((fP + fM, gP + gM), axis=-1)
+        diffusion_term =  lambda_max*(QM - QP)
+        face_integral = jnp.einsum('pd, pvd -> pv', face_normals, face_flux) + diffusion_term # .reshape(self.mesh.Nfp*self.mesh.Nfaces, self.mesh.K, QP.shape[-1], order='F')
+        return face_integral
+
+    def surface_integral(self, QM, QP, gamma):
+        face_integral = jax.vmap(jax.vmap(self.lax_friedrichs_flux ,in_axes=(1,1,1,None), out_axes=1),in_axes=(1,1,1,None), out_axes=1)(QM, QP, self.mesh.face_normals, gamma)
+        return - jnp.einsum('inf,nfkl->ikl',self.mesh.Lift, self.mesh.face_scale/2 * face_integral)
+
+    def max_local_speed(self, QM, QP, gamma):
+        _, _, rhoM, uM, vM, pM = euler_fluxes_2d(QM, gamma) # rhoM, uM, vM, pM shape = [Nfp]
+        _, _, rhoP, uP, vP, pP = euler_fluxes_2d(QP, gamma) # rhoP, uP, vP, pP shape = [Nfp]
         lambda_val = jnp.maximum(
             jnp.sqrt(uM**2 + vM**2) + jnp.sqrt(jnp.abs(gamma * pM / (jnp.abs(rhoM)+1e-15))),
             jnp.sqrt(uP**2 + vP**2) + jnp.sqrt(jnp.abs(gamma * pP / (jnp.abs(rhoP)+1e-15)))
-        )
-
-        lambda_val = lambda_val.reshape(self.mesh.Nfp, self.mesh.Nfaces * self.mesh.K, order='F')
-        lambda_max = jnp.max(lambda_val, axis=0)
-        lambda_val = jnp.ones((self.mesh.Nfp, 1)) @ lambda_max.reshape(1, -1)
-        lambda_val = lambda_val.reshape(self.mesh.Nfp * self.mesh.Nfaces, self.mesh.K, order='F')
-        # 2.5 Lift fluxes
-        face_flux = jnp.stack((fP + fM, gP + gM), axis=-1)
-        face_integral = jnp.einsum('ned, nevd -> nev', self.mesh.face_normals, face_flux) + lambda_val[...,None] * (QM - QP) 
-        rhsQ = volume_integral - jnp.einsum('ij,jkl->ikl',self.mesh.Lift, self.mesh.face_scale[...,None] * face_integral / 2)
-        rhsQ = jnp.einsum('ij, jkn -> ikn', self.Filt, rhsQ) 
-        return rhsQ
+        ) # lambda_val shape = [Nfp]
+        lambda_max = jnp.max(lambda_val) # lambda_max shape = [1]
+        return lambda_max
 
     def euler_2d(self, Q, final_time):
         """
@@ -236,12 +250,12 @@ class Euler_2D:
 
 if __name__ == "__main__":
     
-    EulerSolver = Euler_2D("Mesh_neu/Euler0025.neu", 5, isentropic_vortex_bc_2d)
+    EulerSolver = Euler_2D("Mesh_neu/vortexA04.neu", 5, isentropic_vortex_bc_2d)
 
     # Compute initial condition
     Q = isentropic_vortex_ic_2d(EulerSolver.mesh.x, EulerSolver.mesh.y, 0)
 
-    final_time = 0.01 
+    final_time = 0.02 
     # Solve problem
     # EulerSolver.test_euler_rhs_2d(Q, final_time, isentropic_vortex_bc_2d)
     # # Solve problem

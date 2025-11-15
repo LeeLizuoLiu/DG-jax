@@ -26,8 +26,8 @@ class TriMesh(Mesh):
     invVand: Array               # [Np, Np] - Inverse Vandermonde matrix
     # J: Array                   # [Np, K] - Volume Jacobian
     Dw: Array                    # Weak differentiation matrix [dr, ds]
-    rs_xy: Array                 # [dr/dx, ds/dx]
-                                 # [dr/dy, ds/dy]
+    rs_xy: Array                 # [dr/dx, dr/dy]
+                                 # [ds/dx, ds/dy]
     face_normals: Array          # [Nfp*Nfaces, K, 2] - Face normals (nx, ny)
     # face_sJ: Array             # [Nfp, Nfaces, K] - Surface Jacobian
     face_scale: Array            # [Nfp, Nfaces, K] - Fscale = sJ / J
@@ -142,10 +142,10 @@ class TriMesh(Mesh):
             # J=jnp.array(J),
             Dw=jnp.array(Dw),
             rs_xy=jnp.array(rs_xy),
-            face_normals=jnp.array(face_normals),
+            face_normals=jnp.array(face_normals.reshape(Nfp, 3, K, 2, order='F')),
             # face_sJ=jnp.array(face_sJ),
-            face_scale=jnp.array(face_scale),
-            Lift=jnp.array(Lift),
+            face_scale=jnp.array(face_scale.reshape(Nfp, 3, K, 1, order='F')),
+            Lift=jnp.array(Lift.reshape(-1, Nfp, 3, order='F')),
             # Connectivity
             # EToV=jnp.array(EToV),
             EToE=EToE,

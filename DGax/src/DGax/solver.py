@@ -3,12 +3,13 @@ import jax.numpy as jnp
 from jax import Array, vmap
 from typing import Callable, Dict
 from .boundary_conditions.boundary_conditions import BoundaryCondition
+from .mesh.mesh import Mesh
 from functools import partial
 
 class DGSolver(eqx.Module):
     equations: eqx.Module
     riemann_solver: Callable
-    mesh: eqx.Module  # TriMesh object
+    mesh: Mesh  # TriMesh object
     boundary_conditions: Dict[str, BoundaryCondition]  # bc_name -> BC object
     
     cfl: float = 0.5
@@ -25,27 +26,25 @@ class DGSolver(eqx.Module):
     
     def _surface_integral_with_bc(self, u: Array, t: float) -> Array:
         """Surface flux computation with boundary treatment"""
-        # Extract interior face values: [Nfp, Nfaces, K]
-        u_left = self._extract_faces(u)
+        u_flat = u.reshape(-1, 4, order='F')
+        # Extract interior face values
+        uM = self._extract_faces(u_flat)
         
         # Get neighbor states (before BC modification)
-        u_right = self._get_neighbor_states(u_left)
+        uP = self._get_neighbor_states(u_flat)
         
         # Apply boundary conditions where needed
-        u_right = self._apply_boundary_conditions(u_left, u_right, t)
+        uP = self._apply_boundary_conditions(uM, uP, t)
         
         # Compute flux with modified exterior state
-        flux_faces = self._compute_numerical_flux(u_left, u_right)
+        flux_faces = self._compute_numerical_flux(uM, uP)
         
         # Lift to volume
-        return self.mesh.Lift @ flux_faces.reshape(-1, self.mesh.n_elements, order='F')
+        return  - jnp.einsum('ij,jkl->ikl',self.mesh.Lift, self.mesh.face_scale[...,None] * flux_faces / 2) 
     
-    def _get_neighbor_states(self, u_left: Array) -> Array:
+    def _get_neighbor_states(self, u_flat: Array) -> Array:
         """Get neighbor state (including self for boundaries)"""
-        u_flat = u_left.reshape(-1, order='F')
-        return u_flat[self.mesh.vmapP].reshape(
-            self.mesh.Nfp, self.mesh.Nfaces, self.mesh.n_elements, order='F'
-        )
+        return u_flat[self.mesh.mapP,:]
     
     def _apply_boundary_conditions(
         self,
@@ -90,7 +89,7 @@ class DGSolver(eqx.Module):
         
         return u_right_bc
     
-    def _compute_numerical_flux(self, u_left: Array, u_right: Array) -> Array:
+    def _compute_numerical_flux(self, uM: Array, uP: Array) -> Array:
         """Vectorized Riemann solver"""
         solver = partial(self.riemann_solver, equations=self.equations)
         
@@ -100,13 +99,10 @@ class DGSolver(eqx.Module):
                 in_axes=(0, 0, 0)
             ),
             in_axes=(2, 2, 2)
-        )(u_left, u_right, self.mesh.face_normals)
+        )(uM, uP, self.mesh.face_normals)
     
-    def _extract_faces(self, u: Array) -> Array:
-        u_flat = u.reshape(-1, order='F')
-        return u_flat[self.mesh.vmapM].reshape(
-            self.mesh.Nfp, self.mesh.Nfaces, self.mesh.n_elements, order='F'
-        )
+    def _extract_faces(self, u_flat: Array) -> Array:
+        return u_flat[self.mesh.mapM, :]
     
     def _volume_integral(self, u: Array) -> Array:
         """Weak form volume integral
@@ -116,15 +112,11 @@ class DGSolver(eqx.Module):
         weak_flux = jnp.einsum("jknm,pjd->pknmd", flux, Dw) [Np, K, n_vars, 2, 2]
                                                                             [dFdr  dFds]
                                                                             [dGdr  dGds]
-        Jrs_xy = [[rx sx]
-                  [ry sy]]  shape = [Np, K, 2, 2]
+        Jrs_xy = [[rx ry]
+                  [sx sy]]  shape = [Np, K, 2, 2]
         volume_flux = jnp.einsum("pknmd, pkmd->pkn", weak_flux, Jrs_xy)
         """
         flux = self.equations.flux(u)
-        dFdr =  self.mesh.Drw @ flux[...,0]
-        dFds =  self.mesh.Dsw @ flux[...,0]
-        dGdr =  self.mesh.Drw @ flux[...,1]
-        dGds =  self.mesh.Dsw @ flux[...,1]
-        dFdx = self.mesh.rx * dFdr + self.mesh.sx * dFds
-        dGdy = self.mesh.ry * dGdr + self.mesh.sy * dGds
-        return   dFdx + dGdy
+        weak_flux = jnp.einsum("jknm,pjd->pknmd", flux, self.mesh.Dw)
+        volume_integral = jnp.einsum("pknmd, pkmd->pkn", weak_flux, self.mesh.rs_xy)
+        return  volume_integral 
