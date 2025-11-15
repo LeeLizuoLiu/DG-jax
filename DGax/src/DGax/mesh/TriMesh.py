@@ -5,7 +5,6 @@ from typing import Tuple, Dict
 import jax.numpy as jnp
 from jax import Array
 import numpy as np
-from .TriElement import TriElements
 from recursivenodes.nodes import warburton
 from recursivenodes.polynomials import proriolkoornwinderdubinervandermondegrad as VandGrad
 from recursivenodes.polynomials import proriolkoornwinderdubinervandermonde as Vandermonde
@@ -104,7 +103,7 @@ class TriMesh(Mesh):
         # Use recursivenodes library for nodes
         Np = (order + 1) * (order + 2) // 2
         Nfp = order + 1
-        r, s, Vand, Vr, Vs = TriElements(order)
+        r, s, Vand, Vr, Vs = _TriElements(order)
         Dr = Vr @ np.linalg.inv(Vand)
         Ds = Vs @ np.linalg.inv(Vand)
         Drw = (Vand @ Vr.T) @ np.linalg.inv( (Vand @ Vand.T) )
