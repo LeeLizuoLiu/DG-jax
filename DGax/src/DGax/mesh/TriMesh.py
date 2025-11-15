@@ -5,6 +5,7 @@ from typing import Tuple, Dict
 import jax.numpy as jnp
 from jax import Array
 import numpy as np
+from .TriElement import TriElements
 from recursivenodes.nodes import warburton
 from recursivenodes.polynomials import proriolkoornwinderdubinervandermondegrad as VandGrad
 from recursivenodes.polynomials import proriolkoornwinderdubinervandermonde as Vandermonde
@@ -20,13 +21,15 @@ class TriMesh(Mesh):
     # --- Geometry data
     x: Array                     # [Np, K] - Physical x-coordinates
     y: Array                     # [Np, K] - Physical y-coordinates
+    Fx: Array                    # [Nfp*Nfaces, K] - Face x-coordinates
+    Fy: Array                    # [Nfp*Nfaces, K] - Face y-coordinates
     Vand: Array                  # [Np, Np] - Vandermonde matrix
     invVand: Array               # [Np, Np] - Inverse Vandermonde matrix
     # J: Array                   # [Np, K] - Volume Jacobian
     Dw: Array                    # Weak differentiation matrix [dr, ds]
     rs_xy: Array                 # [dr/dx, ds/dx]
                                  # [dr/dy, ds/dy]
-    face_normals: Array          # [Nfp, Nfaces, K, 2] - Face normals (nx, ny)
+    face_normals: Array          # [Nfp*Nfaces, K, 2] - Face normals (nx, ny)
     # face_sJ: Array             # [Nfp, Nfaces, K] - Surface Jacobian
     face_scale: Array            # [Nfp, Nfaces, K] - Fscale = sJ / J
     Lift: Array                  # [Np, Nfaces*Nfp] - Surface to volume lift operator
@@ -44,6 +47,8 @@ class TriMesh(Mesh):
     # --- Metadata
     order: int                   # Polynomial order
     Np: int                      # Nodes per element
+    Nfp: int                     # Nodes per face
+    K: int                       # Number of elements
     Nfaces: int = 3              # Fixed for triangles
     
     # --- Properties
@@ -53,7 +58,7 @@ class TriMesh(Mesh):
     
     @property
     def n_elements(self) -> int:
-        return self.EToV.shape[0]
+        return self.K
     
     @property
     def n_nodes_per_element(self) -> int:
@@ -99,24 +104,24 @@ class TriMesh(Mesh):
         # Use recursivenodes library for nodes
         Np = (order + 1) * (order + 2) // 2
         Nfp = order + 1
-        r, s, Vand, Vr, Vs = _TriElements(order)
+        r, s, Vand, Vr, Vs = TriElements(order)
         Dr = Vr @ np.linalg.inv(Vand)
         Ds = Vs @ np.linalg.inv(Vand)
         Drw = (Vand @ Vr.T) @ np.linalg.inv( (Vand @ Vand.T) )
         Dsw = (Vand @ Vs.T) @ np.linalg.inv( (Vand @ Vand.T) )
         Dw = np.stack([Drw, Dsw], axis=-1)  # [Np, Np, 2]    
         # Step 2: Compute physical coordinates
-        x, y, Fmask = _compute_physical_coordinates(EToV, VX, VY, r, s, NODETOL)
+        x, y, Fmask, Fx, Fy = _compute_physical_coordinates(EToV, VX, VY, r, s, NODETOL)
         
         # Step 3: Compute geometric factors
         rx, sx, ry, sy, J = _compute_geometric_factors(x, y, Dr, Ds)
-        rs_x = np.stack([rx, sx], axis=-1)
-        rs_y = np.stack([ry, sy], axis=-1)
-        rs_xy = np.stack([rs_x, rs_y], axis=-1) # [Np, K, 2, 2]
+        r_xy = np.stack([rx, ry], axis=-1)
+        s_xy = np.stack([sx, sy], axis=-1)
+        rs_xy = np.stack([r_xy, s_xy], axis=-1) # [Np, K, 2, 2]
         Lift = _Lift(order, Np, 3, Nfp, Fmask, r, s, Vand)
         
         # Step 4: Compute face normals and Jacobians
-        face_normals, face_sJ = _compute_face_normals(Dr, Ds, x, y, Fmask, order, K)
+        face_normals, face_sJ = _compute_face_normals(Dr, Ds, x, y, Fmask, Nfp, K)
         face_scale = face_sJ / J[Fmask.flatten('F'), :]
         
         # Step 5: Compute connectivity (NumPy)
@@ -131,6 +136,8 @@ class TriMesh(Mesh):
             # Geometry
             x=jnp.array(x),
             y=jnp.array(y),
+            Fx=jnp.array(Fx),
+            Fy=jnp.array(Fy),
             Vand=jnp.array(Vand),
             invVand = jnp.array(np.linalg.inv(Vand)),
             # J=jnp.array(J),
@@ -148,10 +155,12 @@ class TriMesh(Mesh):
             mapP=mapP,
             vmapM=vmapM,
             vmapP=vmapP,
-            bc_maps={k: v for k, v in bc_maps.items()},
+            bc_maps= bc_maps,
             # Metadata
             order=order,
             Np=Np,
+            Nfp=Nfp,
+            K=K
         )
 
 # --- Private helper functions (NumPy-only, no JAX dependency) ---
@@ -253,8 +262,11 @@ def _compute_physical_coordinates(
     fmask2 = np.where(np.abs(r + s) < NODETOL)[0]
     fmask3 = np.where(np.abs(r + 1) < NODETOL)[0]
     Fmask = np.stack([fmask1, fmask2, fmask3]).T
-    
-    return x, y, Fmask
+
+    Fx = x[Fmask.flatten(order='F'), :]
+    Fy = y[Fmask.flatten(order='F'), :]
+
+    return x, y, Fmask, Fx, Fy    
 
 def _compute_geometric_factors(
     x: np.ndarray,
@@ -282,41 +294,60 @@ def _compute_face_normals(
     x: np.ndarray,
     y: np.ndarray,
     Fmask: np.ndarray,
-    order: int,
+    Nfp: int,
     K: int
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Compute face normals and surface Jacobians"""
-    Nfp = order + 1
-    Nfaces = 3
-    
-    # Interpolate geometric factors to faces
-    Fmask_flat = Fmask.flatten('F')
+    """
+    Compute outward pointing normals at elements faces and surface Jacobians
+    Parameters:
+    Dr : numpy array
+        Derivative matrix in r direction
+    Ds : numpy array
+        Derivative matrix in s direction
+    x : numpy array
+        x coordinates
+    y : numpy array
+        y coordinates
+    Fmask : numpy array
+        Face mask indices
+    Nfp : int
+        Number of face points
+    K : int
+        Number of elements
+    Returns:
+    nx, ny : numpy arrays
+        Normalized normal vectors
+    sJ : numpy array
+        Surface Jacobians
+    """
+    # Compute geometric factors
     xr = Dr @ x
-    xs = Ds @ x
     yr = Dr @ y
+    xs = Ds @ x
     ys = Ds @ y
-    
-    fxr = xr[Fmask_flat, :]
-    fxs = xs[Fmask_flat, :]
-    fyr = yr[Fmask_flat, :]
-    fys = ys[Fmask_flat, :]
-    
-    # Initialize normals
-    nx = np.zeros((Nfp * Nfaces, K))
-    ny = np.zeros((Nfp * Nfaces, K))
-    
-    # Face 1: s = -1
-    nx[:Nfp, :] = fyr[:Nfp, :]
-    ny[:Nfp, :] = -fxr[:Nfp, :]
-    
-    # Face 2: r + s = 0
-    nx[Nfp:2*Nfp, :] = fys[Nfp:2*Nfp, :] - fyr[Nfp:2*Nfp, :]
-    ny[Nfp:2*Nfp, :] = -fxs[Nfp:2*Nfp, :] + fxr[Nfp:2*Nfp, :]
-    
-    # Face 3: r = -1
-    nx[2*Nfp:, :] = -fys[2*Nfp:, :]
-    ny[2*Nfp:, :] = fxs[2*Nfp:, :]
-    
+    J = xr * ys - xs * yr
+    Fmask = Fmask.flatten(order='F')
+    # Interpolate geometric factors to face nodes
+    fxr = xr[Fmask, :]
+    fxs = xs[Fmask, :]
+    fyr = yr[Fmask, :]
+    fys = ys[Fmask, :]
+    # Initialize normal vectors
+    nx = np.zeros((3*Nfp, K))
+    ny = np.zeros((3*Nfp, K))
+    # Define face indices
+    fid1 = np.arange(Nfp)
+    fid2 = np.arange(Nfp, 2*Nfp)
+    fid3 = np.arange(2*Nfp, 3*Nfp)
+    # Face 1
+    nx[fid1, :] = fyr[fid1, :]
+    ny[fid1, :] = -fxr[fid1, :]
+    # Face 2
+    nx[fid2, :] = fys[fid2, :] - fyr[fid2, :]
+    ny[fid2, :] = -fxs[fid2, :] + fxr[fid2, :]
+    # Face 3
+    nx[fid3, :] = -fys[fid3, :]
+    ny[fid3, :] = fxs[fid3, :]
     # Normalize
     sJ = np.sqrt(nx**2 + ny**2)
     nx = nx / sJ
@@ -482,8 +513,8 @@ def _build_bc_maps(
     
     # Flatten for easier indexing
     bct = BCType.T  # [K, Nfaces]
-    bnodes = np.outer(np.ones(Nfp), bct.flatten('F')).astype(int)
-    
+    bnodes = np.outer(np.ones(Nfp), bct.flatten(order='F')).astype(int)
+    bnodes = bnodes.flatten(order='F')
     # Define BC names
     BC_NAMES = {
         1: "in", 2: "out", 3: "wall", 4: "far",
@@ -491,7 +522,7 @@ def _build_bc_maps(
     }
     
     for code, name in BC_NAMES.items():
-        mask = np.where(bnodes.flatten() == code)[0]
-        bc_maps[name] = vmapM[mask]
+        mask = np.where(bnodes == code)[0]
+        bc_maps[name] = mask
     
     return bc_maps        

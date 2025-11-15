@@ -78,11 +78,7 @@ def read_gambit_neu(mesh_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray,
         
         # boundary codes
         BCType = np.zeros((K, 3), dtype=int)
-        
-        # Read all the boundary conditions at the nodes
-        fid.readline()  # BOUNDARY CONDITIONS 1.3.0
         bc_code = 0  # Default to interior (0) until we find a BC definition
-
         while line:
             stripped = line.strip()
 
