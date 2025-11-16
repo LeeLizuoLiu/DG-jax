@@ -39,9 +39,8 @@ class DGSolver(eqx.Module):
         # Compute flux with modified exterior state
         flux_faces = self._compute_numerical_flux(uM, uP)
         
-        # Lift to volume
-        return  - jnp.einsum('ij,jkl->ikl',self.mesh.Lift, self.mesh.face_scale[...,None] * flux_faces / 2) 
-    
+        return - jnp.einsum('inf,nfkl->ikl',self.mesh.Lift, self.mesh.face_scale/2 * flux_faces)
+
     def _get_neighbor_states(self, u_flat: Array) -> Array:
         """Get neighbor state (including self for boundaries)"""
         return u_flat[self.mesh.mapP,:]
@@ -93,13 +92,12 @@ class DGSolver(eqx.Module):
         """Vectorized Riemann solver"""
         solver = partial(self.riemann_solver, equations=self.equations)
         
-        return vmap(
-            vmap(
-                vmap(solver, in_axes=(0, 0, 0)),
-                in_axes=(0, 0, 0)
-            ),
-            in_axes=(2, 2, 2)
-        )(uM, uP, self.mesh.face_normals)
+        face_flux = vmap(
+                              vmap(solver ,in_axes=(1,1,1,None), out_axes=1),
+                            in_axes=(1,1,1,None), out_axes=1)(uM, uP, self.mesh.face_normals)
+        return face_flux
+
+
     
     def _extract_faces(self, u_flat: Array) -> Array:
         return u_flat[self.mesh.mapM, :]

@@ -14,28 +14,55 @@ class Euler2D(Equation):
         """Initialize with constant velocity vector (vx, vy)."""
         self.gamma = jnp.array(gamma, dtype=jnp.float64)
     
-    def flux(self, u: Array) -> Array:
-        """Flux: F(u) = a * u
-        
+    def conserved2primitive(self, Q: Array) -> Array:
+        """
         Args:
-            u: Scalar field, shape [..., 1] or [...]
+            Q, conserved variable, shape [..., 4]
         
         Returns:
-            Flux vector, shape [..., 2]
+               primitive variable, shape [..., 4]
         """
-        # Ensure u has a variable dimension for broadcasting
-        u_ = jnp.atleast_1d(u)
-        return u_[..., None] * self.velocity
+        # Extract conserved variables
+        rho  = Q[...,0]
+        rhou = Q[...,1]
+        rhov = Q[...,2]
+        Ener = Q[...,3]
     
-    def max_eigval(self, u: Array, normal: Array) -> Array:
-        """Maximum wave speed = |a·n|
+        # Compute primitive variables
+        u = rhou / (jnp.abs(rho) + 1e-15)
+        v = rhov / (jnp.abs(rho) + 1e-15)
+        p = (self.gamma - 1) * (Ener - 0.5 * (rhou * u + rhov * v))
+        return rho, u, v, p # jnp.stack([rho, u, v, p], axis=-1)
+
+    def flux(self, Q: Array) -> Array:
+        """Flux function for Euler equations
         
         Args:
-            u: State (unused but kept for interface consistency)
+            Q: shape [..., 4]
+        
+        Returns:
+            Flux vector, shape [..., 4, 2]
+        """
+        rho, _, _, Ener = Q[..., 0], Q[..., 1], Q[..., 2], Q[..., 3]
+        rho, u, v, p = self.conserved2primitive(Q) 
+        # Compute flux functions using functional syntax
+        F = jnp.stack([rho * u, rho * u * u + p, rho * v * u, u * (Ener + p)], axis=-1)
+        G = jnp.stack([rho * v, rho * u * v, rho * v * v + p, v * (Ener + p)], axis=-1)
+    
+        return jnp.stack([F, G], axis=-1)
+    
+    def max_wave_speed(self, Q: Array, normal: Array) -> Array:
+        """Maximum wave speed
+        
+        Args:
+            u: Conserved variable [rho, rhou, rhov, Ener]
             normal: Normal vector [nx, ny]
         
+        References: Trixi.jl, max_abs_speed
         Returns:
-            Absolute wave speed, scalar or broadcasted shape
+            Absolute wave speed
         """
-        speed = jnp.dot(self.velocity, normal)
-        return jnp.abs(speed)
+        rho, u, v, p = self.conserved2primitive(Q)
+        c = jnp.sqrt(jnp.abs(self.gamma * p / (jnp.abs(rho) + 1e-15)))
+        proj_vel = normal[0] * u + normal[1] * v
+        return jnp.abs(proj_vel) + c

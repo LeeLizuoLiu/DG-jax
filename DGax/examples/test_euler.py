@@ -206,6 +206,12 @@ class Euler_2D:
     def max_local_speed(self, QM, QP, gamma):
         _, _, rhoM, uM, vM, pM = euler_fluxes_2d(QM, gamma) # rhoM, uM, vM, pM shape = [Nfp]
         _, _, rhoP, uP, vP, pP = euler_fluxes_2d(QP, gamma) # rhoP, uP, vP, pP shape = [Nfp]
+        def eigval(rho, u, v, p):
+            c = jnp.sqrt(jnp.abs(gamma * p / (jnp.abs(rho) + 1e-15)))
+            lambda_F = jnp.maximum( u - c, jnp.maximum(u, u + c))
+            lambda_G = jnp.maximum( v - c, jnp.maximum(v, v + c))
+            return jnp.sqrt(lambda_F**2 + lambda_G**2)
+
         lambda_val = jnp.maximum(
             jnp.sqrt(uM**2 + vM**2) + jnp.sqrt(jnp.abs(gamma * pM / (jnp.abs(rhoM)+1e-15))),
             jnp.sqrt(uP**2 + vP**2) + jnp.sqrt(jnp.abs(gamma * pP / (jnp.abs(rhoP)+1e-15)))
