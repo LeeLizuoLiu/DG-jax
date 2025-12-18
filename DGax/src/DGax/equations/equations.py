@@ -2,7 +2,7 @@ import equinox as eqx
 from jax import Array
 from typing import Protocol
 
-class Equation(eqx.Module, Protocol):
+class Equation(eqx.Module):
     """Protocol that all PDE equations must implement."""
     
     def flux(self, u: Array) -> Array:

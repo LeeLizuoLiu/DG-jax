@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from jax import Array
 from typing import Protocol, Callable
 
-class BoundaryCondition(eqx.Module, Protocol):
+class BoundaryCondition(eqx.Module):
     """
     Protocol for boundary conditions.
     All BCs must implement __call__ that returns exterior state.

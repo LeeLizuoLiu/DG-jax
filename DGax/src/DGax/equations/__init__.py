@@ -1,9 +1,9 @@
 from .Advection import Advection2D
-from .CompressibleEuler import euler_2d
+from .CompressibleEuler import Euler2D 
 
 
 
 
 __all__ = [
-    "Advection2D",
+    "Euler2D",
 ]

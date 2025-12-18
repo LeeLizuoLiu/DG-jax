@@ -1,16 +1,16 @@
 import jax.numpy as jnp
 from .equations import Equation
 from jax import Array
-from typing import Tuple, Float  
+from typing import Tuple  
 
 
 class Euler2D(Equation):
     """2D Compressible Euler Equation: ∂u/∂t +∇·F(u) = 0
     """
     
-    gamma: Float  
+    gamma: float  
     
-    def __init__(self, gamma: Float):
+    def __init__(self, gamma: float):
         """Initialize with constant velocity vector (vx, vy)."""
         self.gamma = jnp.array(gamma, dtype=jnp.float64)
     
@@ -64,5 +64,5 @@ class Euler2D(Equation):
         """
         rho, u, v, p = self.conserved2primitive(Q)
         c = jnp.sqrt(jnp.abs(self.gamma * p / (jnp.abs(rho) + 1e-15)))
-        proj_vel = normal[0] * u + normal[1] * v
-        return jnp.abs(proj_vel) + c
+        # proj_vel = normal[0] * u + normal[1] * v
+        return jnp.sqrt(u**2 + v**2) + c

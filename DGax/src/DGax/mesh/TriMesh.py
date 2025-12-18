@@ -9,6 +9,7 @@ from recursivenodes.nodes import warburton
 from recursivenodes.polynomials import proriolkoornwinderdubinervandermondegrad as VandGrad
 from recursivenodes.polynomials import proriolkoornwinderdubinervandermonde as Vandermonde
 from .mesh import Mesh
+from .TriElement import TriElements
 from .io import read_gambit_neu
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ class TriMesh(Mesh):
         # Use recursivenodes library for nodes
         Np = (order + 1) * (order + 2) // 2
         Nfp = order + 1
-        r, s, Vand, Vr, Vs = _TriElements(order)
+        r, s, Vand, Vr, Vs = TriElements(order)
         Dr = Vr @ np.linalg.inv(Vand)
         Ds = Vs @ np.linalg.inv(Vand)
         Drw = (Vand @ Vr.T) @ np.linalg.inv( (Vand @ Vand.T) )
@@ -128,7 +129,7 @@ class TriMesh(Mesh):
         mapM, mapP, vmapM, vmapP = _build_node_maps(
             K, Np, 3, Nfp, Fmask, EToE, EToF, EToV, VX, VY, x, y, NODETOL
         )
-        bc_maps = _build_bc_maps(Nfp, BCType, vmapM)
+        bc_maps = _build_bc_maps(Nfp, BCType)
         
         # Step 6: Convert to JAX arrays and freeze
         return cls(
@@ -504,7 +505,7 @@ def _build_node_maps(
     return mapM, mapP, vmapM, vmapP
 
 def _build_bc_maps(
-    Nfp: int, BCType: np.ndarray, vmapM: np.ndarray
+    Nfp: int, BCType: np.ndarray
 ) -> Dict[str, np.ndarray]:
     """Build boundary condition node maps"""
     # BCType: [Nfaces, K]

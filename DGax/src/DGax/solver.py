@@ -1,19 +1,27 @@
 import equinox as eqx
 import jax.numpy as jnp
-from jax import Array, vmap
+from jax import Array, vmap, jit
 from typing import Callable, Dict
-from .boundary_conditions.boundary_conditions import BoundaryCondition
+from .boundary_conditions.BoundaryConditions import BoundaryCondition
 from .mesh.mesh import Mesh
 from functools import partial
+import pdb
 
-class DGSolver(eqx.Module):
+class DGSolver:
     equations: eqx.Module
     riemann_solver: Callable
     mesh: Mesh  # TriMesh object
     boundary_conditions: Dict[str, BoundaryCondition]  # bc_name -> BC object
     
     cfl: float = 0.5
+
+    def __init__(self, equations, riemann_solver, mesh, boundary_conditions):
+        self.equations = equations
+        self.riemann_solver = riemann_solver
+        self.mesh = mesh
+        self.boundary_conditions = boundary_conditions
     
+    @partial(jit, static_argnums=0)
     def rhs(self, u: Array, t: float) -> Array:
         """Compute du/dt with BC enforcement"""
         # Volume integral (unchanged)
@@ -53,10 +61,10 @@ class DGSolver(eqx.Module):
     ) -> Array:
         """
         Transform u_right for boundary faces using BC objects.
-        Uses vectorized operations over all BC types.
+        Over non periodic BCs.
         """
         # Initialize modified exterior state
-        u_right_bc = u_right
+        u_right_bc = u_right.copy()
         
         # Iterate over boundary types (e.g., "inlet", "wall")
         for bc_type, bc_obj in self.boundary_conditions.items():
@@ -66,35 +74,36 @@ class DGSolver(eqx.Module):
             if len(face_indices) == 0:
                 continue
             
-            # Reshape indices for 3D array indexing
+            # Reshape indices for 2D array indexing
             # face_indices are linear in [Nfp, Nfaces, K] ordering
-            idx_f, idx_face, idx_elem = jnp.unravel_index(
-                face_indices, (self.mesh.Nfp, self.mesh.Nfaces, self.mesh.n_elements)
+            idx_elem, idx_fn  = jnp.unravel_index(
+                face_indices, (self.mesh.n_elements, self.mesh.Nfp*self.mesh.Nfaces, )
             )
             
-            # Extract interior states for these boundary faces
-            u_interior = u_left[idx_f, idx_face, idx_elem]
+            u_exterior = u_right[idx_fn, idx_elem]
             
             # Get corresponding normals
-            normals = self.mesh.face_normals[idx_f, idx_face, idx_elem]
+            normals = self.mesh.face_normals[idx_fn, idx_elem]
             
-            # Apply BC transformation (vectorized over selected faces)
-            u_exterior = vmap(
-                lambda ui, n: bc_obj(ui, n, self.equations, t)
-            )(u_interior, normals)
+            Fx = self.mesh.Fx[idx_fn, idx_elem]
+            Fy = self.mesh.Fy[idx_fn, idx_elem]
+            
+            # Apply BC transformation
+            u_exterior = bc_obj(u_exterior, normals, Fx, Fy, t)
             
             # Update u_right at boundary faces
-            u_right_bc = u_right_bc.at[idx_f, idx_face, idx_elem].set(u_exterior)
+            u_right_bc = u_right_bc.at[idx_fn, idx_elem].set(u_exterior)
         
         return u_right_bc
     
     def _compute_numerical_flux(self, uM: Array, uP: Array) -> Array:
         """Vectorized Riemann solver"""
+        uM = uM.reshape(self.mesh.Nfp, self.mesh.Nfaces, self.mesh.K, uM.shape[-1], order='F') # shape = [Nfp, Nfaces, K, n_vars]
+        uP = uP.reshape(self.mesh.Nfp, self.mesh.Nfaces, self.mesh.K, uP.shape[-1], order='F') # shape = [Nfp, Nfaces, K, n_vars]        
         solver = partial(self.riemann_solver, equations=self.equations)
-        
         face_flux = vmap(
-                              vmap(solver ,in_axes=(1,1,1,None), out_axes=1),
-                            in_axes=(1,1,1,None), out_axes=1)(uM, uP, self.mesh.face_normals)
+                              vmap(solver ,in_axes=(1,1,1), out_axes=1),
+                            in_axes=(1,1,1), out_axes=1)(uM, uP, self.mesh.face_normals)
         return face_flux
 
 
