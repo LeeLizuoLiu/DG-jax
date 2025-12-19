@@ -1,5 +1,5 @@
+# DGax/src/DGax/equations/Advection.py
 
-import equinox as eqx
 import jax.numpy as jnp
 from jax import Array
 from typing import Tuple
@@ -21,24 +21,48 @@ class Advection2D(Equation):
         """Flux: F(u) = a * u
         
         Args:
-            u: Scalar field, shape [..., 1] or [...]
+            u: Scalar field, shape [Np, K, 1] (last dim is n_vars)
         
         Returns:
-            Flux vector, shape [..., 2]
+            Flux tensor, shape [Np, K, 1, 2]
+            Last dimension is [F, G] where F = vx*u, G = vy*u
         """
-        # Ensure u has a variable dimension for broadcasting
-        u_ = jnp.atleast_1d(u)
-        return u_[..., None] * self.velocity
+        # u has shape [Np, K, 1]
+        # We need to return [Np, K, 1, 2]
+        # where [:, :, 0, 0] = vx * u[:, :, 0]
+        #       [:, :, 0, 1] = vy * u[:, :, 0]
+        
+        F = self.velocity[0] * u  # [Np, K, 1]
+        G = self.velocity[1] * u  # [Np, K, 1]
+        
+        # Stack along new dimension
+        return jnp.stack([F, G], axis=-1)  # [Np, K, 1, 2]
     
     def max_eigval(self, u: Array, normal: Array) -> Array:
         """Maximum wave speed = |a·n|
         
         Args:
             u: State (unused but kept for interface consistency)
-            normal: Normal vector [nx, ny]
+            normal: Normal vector, shape [..., 2]
         
         Returns:
-            Absolute wave speed, scalar or broadcasted shape
+            Absolute wave speed, shape [...]
         """
-        speed = jnp.dot(self.velocity, normal)
-        return jnp.abs(speed)
+        # Handle different input shapes for normal
+        # normal can be [2,], [Nfp, 2], [Nfp, Nfaces, K, 2], etc.
+        
+        # Compute dot product along last dimension
+        speed = jnp.sqrt(jnp.sum((self.velocity*normal)**2, axis=-1)) # jnp.sum(self.velocity * normal, axis=-1)
+        return speed
+    
+    def max_wave_speed(self, u: Array, normal: Array) -> Array:
+        """Alias for max_eigval for compatibility with LocalLaxFriedrichs
+        
+        Args:
+            u: State (unused)
+            normal: Normal vector, shape [..., 2]
+        
+        Returns:
+            Absolute wave speed, shape [...]
+        """
+        return self.max_eigval(u, normal)
